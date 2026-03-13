@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste Botão Gerar Novo Pix</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .hidden { display: none; }
+        .btn { padding: 10px 15px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Teste de Funcionalidade do Botão "Gerar novo Pix"</h1>
+    
+    <div class="test-section">
+        <h3>Simulação do Modal PIX</h3>
+        <div id="pix-live-modal" class="modal-content" style="border: 2px solid #ccc; padding: 20px; margin: 10px 0;">
+            <h2>Pagamento Pix</h2>
+            <div id="pix-live-qr">QR Code aparecerá aqui</div>
+            <div id="pix-live-status">Aguardando pagamento...</div>
+            <div style="margin-top: 15px;">
+                <button id="pix-confirm-btn" class="btn btn-primary" onclick="finalizePixSale()">Confirmar pagamento</button>
+                <button id="pix-regenerate-btn" class="btn btn-primary hidden" onclick="regeneratePix()">Gerar novo Pix</button>
+                <button class="btn btn-secondary" onclick="closePixLiveModal()">Cancelar</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h3>Testes de Estado dos Botões</h3>
+        <button onclick="testInitialState()" class="btn btn-secondary">Testar Estado Inicial</button>
+        <button onclick="testExpiredState()" class="btn btn-secondary">Testar Estado Expirado</button>
+        <button onclick="testRegenerateClick()" class="btn btn-secondary">Testar Clique em Gerar Novo Pix</button>
+        <div id="test-results"></div>
+    </div>
+
+    <script>
+        // Mock functions and variables
+        let currentPixTxid = null;
+        let currentPixPaid = false;
+        let pixPollInterval = null;
+        let pendingSaleData = { total: 100.00 };
+
+        function esc(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function toastSuccess(msg) {
+            console.log('✅', msg);
+            document.getElementById('test-results').innerHTML += `<p class="success">✅ ${msg}</p>`;
+        }
+
+        function toastError(msg) {
+            console.log('❌', msg);
+            document.getElementById('test-results').innerHTML += `<p class="error">❌ ${msg}</p>`;
+        }
+
+        function toastWarning(msg) {
+            console.log('⚠️', msg);
+            document.getElementById('test-results').innerHTML += `<p>⚠️ ${msg}</p>`;
+        }
+
+        function getIntegrations() {
+            return { mpEnabled: true, mpAccessToken: 'test-token' };
+        }
+
+        function api(path) {
+            return `/api${path}`;
+        }
+
+        function fetchWithTimeout(url, options, timeout) {
+            // Mock function that simulates API calls
+            return new Promise((resolve) => {
+                setTimeout(() => {
+                    if (url.includes('pix/charge') && options.method === 'POST') {
+                        resolve({
+                            json: () => Promise.resolve({
+                                txid: 'mock-txid-' + Date.now(),
+                                qr_base64: 'mock-base64-qr',
+                                payload: 'mock-payload'
+                            })
+                        });
+                    } else if (url.includes('pix/charge') && url.includes('status')) {
+                        resolve({
+                            json: () => Promise.resolve({ status: 'pending' })
+                        });
+                    }
+                }, 500);
+            });
+        }
+
+        function finalizePixSale() {
+            if (!currentPixPaid) {
+                toastWarning('Aguarde confirmação do pagamento Pix.');
+                return;
+            }
+            toastSuccess('Pagamento Pix finalizado com sucesso!');
+        }
+
+        function closePixLiveModal() {
+            // Reset button states for next opening
+            document.getElementById('pix-confirm-btn').classList.remove('hidden');
+            document.getElementById('pix-regenerate-btn').classList.add('hidden');
+            document.getElementById('pix-confirm-btn').disabled = true;
+            toastSuccess('Modal fechado e estado resetado');
+        }
+
+        // This is the function we implemented
+        function regeneratePix() {
+            // Reset modal state
+            document.getElementById('pix-live-status').innerText = 'Aguardando pagamento...';
+            document.getElementById('pix-confirm-btn').classList.remove('hidden');
+            document.getElementById('pix-regenerate-btn').classList.add('hidden');
+            document.getElementById('pix-confirm-btn').disabled = true;
+            
+            // Clear previous PIX data
+            currentPixTxid = null;
+            currentPixPaid = false;
+            
+            // Clear QR code display
+            document.getElementById('pix-live-qr').innerHTML = 'Gerando novo QR Code...';
+            
+            // Generate new PIX using the same logic as before
+            const amount = pendingSaleData ? pendingSaleData.total : 0;
+            if (amount <= 0) {
+                toastError('Valor inválido para gerar Pix');
+                return;
+            }
+            
+            const integrations = getIntegrations();
+            const extraHeaders = {};
+            if (integrations && integrations.mpEnabled && integrations.mpAccessToken) {
+                extraHeaders['x-mp-access-token'] = integrations.mpAccessToken;
+            }
+            
+            const deadline = Date.now() + 5 * 60 * 1000;
+            fetchWithTimeout(api('pix/charge'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...extraHeaders },
+                body: JSON.stringify({ amount, description: 'Venda' })
+            }, 12000).then(r => r.json()).then(d => {
+                currentPixTxid = d.txid;
+                const imgSrc = d.qr_base64 ? `data:image/png;base64,${d.qr_base64}` : `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(d.payload)}`;
+                const img = `<img src="${imgSrc}" width="180" height="180">`;
+                const copiaCola = `<div class="text-sm">Copia e Cola: <span class="select-all bg-white px-2 py-1 rounded border border-gray-200">${esc(d.payload || '')}</span></div>`;
+                document.getElementById('pix-live-qr').innerHTML = img + copiaCola;
+                
+                toastSuccess('Novo Pix gerado com sucesso!');
+            }).catch(() => {
+                toastError('Erro ao gerar novo Pix. Tente novamente.');
+                // Reset buttons on error
+                document.getElementById('pix-confirm-btn').classList.remove('hidden');
+                document.getElementById('pix-regenerate-btn').classList.add('hidden');
+                document.getElementById('pix-live-status').innerText = 'Erro ao gerar Pix';
+            });
+        }
+
+        // Test functions
+        function testInitialState() {
+            document.getElementById('test-results').innerHTML = '<h4>Testando Estado Inicial:</h4>';
+            
+            const confirmBtn = document.getElementById('pix-confirm-btn');
+            const regenerateBtn = document.getElementById('pix-regenerate-btn');
+            
+            const confirmVisible = !confirmBtn.classList.contains('hidden');
+            const regenerateHidden = regenerateBtn.classList.contains('hidden');
+            const confirmDisabled = confirmBtn.disabled;
+            
+            if (confirmVisible && regenerateHidden && confirmDisabled) {
+                toastSuccess('Estado inicial correto: Confirm visível, Regenerate oculto, Confirm desabilitado');
+            } else {
+                toastError(`Estado inicial incorreto: Confirm visível=${confirmVisible}, Regenerate oculto=${regenerateHidden}, Confirm desabilitado=${confirmDisabled}`);
+            }
+        }
+
+        function testExpiredState() {
+            document.getElementById('test-results').innerHTML = '<h4>Testando Estado Expirado:</h4>';
+            
+            // Simulate expired state
+            document.getElementById('pix-live-status').innerText = 'Cobrança expirada. Gere um novo Pix.';
+            document.getElementById('pix-confirm-btn').classList.add('hidden');
+            document.getElementById('pix-regenerate-btn').classList.remove('hidden');
+            
+            const confirmBtn = document.getElementById('pix-confirm-btn');
+            const regenerateBtn = document.getElementById('pix-regenerate-btn');
+            
+            const confirmHidden = confirmBtn.classList.contains('hidden');
+            const regenerateVisible = !regenerateBtn.classList.contains('hidden');
+            
+            if (confirmHidden && regenerateVisible) {
+                toastSuccess('Estado expirado correto: Confirm oculto, Regenerate visível');
+            } else {
+                toastError(`Estado expirado incorreto: Confirm oculto=${confirmHidden}, Regenerate visível=${regenerateVisible}`);
+            }
+        }
+
+        function testRegenerateClick() {
+            document.getElementById('test-results').innerHTML = '<h4>Testando Clique em Gerar Novo Pix:</h4>';
+            
+            // Reset to expired state first
+            testExpiredState();
+            
+            // Simulate button click
+            setTimeout(() => {
+                regeneratePix();
+                
+                // Check if state was reset correctly
+                setTimeout(() => {
+                    const confirmBtn = document.getElementById('pix-confirm-btn');
+                    const regenerateBtn = document.getElementById('pix-regenerate-btn');
+                    const statusEl = document.getElementById('pix-live-status');
+                    
+                    const confirmVisible = !confirmBtn.classList.contains('hidden');
+                    const regenerateHidden = regenerateBtn.classList.contains('hidden');
+                    const confirmDisabled = confirmBtn.disabled;
+                    const statusText = statusEl.innerText;
+                    
+                    if (confirmVisible && regenerateHidden && confirmDisabled && statusText === 'Aguardando pagamento...') {
+                        toastSuccess('Botão Gerar Novo Pix funcionou corretamente!');
+                    } else {
+                        toastError(`Botão Gerar Novo Pix falhou: Confirm visível=${confirmVisible}, Regenerate oculto=${regenerateHidden}, Confirm desabilitado=${confirmDisabled}, Status="${statusText}"`);
+                    }
+                }, 1000);
+            }, 500);
+        }
+
+        // Auto-run initial state test
+        window.onload = function() {
+            testInitialState();
+        };
+    </script>
+</body>
+</html>
